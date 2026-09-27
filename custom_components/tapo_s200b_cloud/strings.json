@@ -1,0 +1,21 @@
+{
+  "title": "Tapo S200B/S200D Cloud Events",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tapo S200B/S200D Cloud Events",
+        "description": "Read smart-button clicks and rotations from Tapo Thing Cloud. This is an unofficial cloud integration. Your Tapo credentials are stored in Home Assistant's config entry and are never written to this repository.",
+        "data": {
+          "account": "Tapo account email",
+          "secret": "Tapo account password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not authenticate to Tapo Thing Cloud or no supported S200B/S200D was found."
+    },
+    "abort": {
+      "already_configured": "This Tapo account is already configured."
+    }
+  }
+}

@@ -1,0 +1,54 @@
+# Generic examples only. Replace placeholders with your own entities/device IDs.
+
+automation:
+  - alias: "Tapo button: single press toggles a light"
+    triggers:
+      - trigger: event
+        event_type: tapo_s200b_pressed
+        event_data:
+          action: single_click
+    actions:
+      - action: light.toggle
+        target:
+          entity_id: light.living_room
+
+  - alias: "Tapo button: one specific button"
+    triggers:
+      - trigger: event
+        event_type: tapo_s200b_pressed
+    conditions:
+      - condition: template
+        value_template: >
+          {{ trigger.event.data.device_id == 'REDACTED_THING_ID' }}
+    actions:
+      - action: light.toggle
+        target:
+          entity_id: light.living_room
+
+  - alias: "Tapo dial: brightness"
+    triggers:
+      - trigger: event
+        event_type: tapo_s200b_rotated
+    actions:
+      - action: light.turn_on
+        target:
+          entity_id: light.living_room
+        data:
+          brightness_step_pct: >
+            {% set deg = trigger.event.data.degrees | int %}
+            {% if deg > 0 %}10{% elif deg < 0 %}-10{% else %}0{% endif %}
+
+  - alias: "Tapo button: inspect unknown/native events"
+    triggers:
+      - trigger: event
+        event_type: tapo_s200b_event
+    conditions:
+      - condition: template
+        value_template: >
+          {{ trigger.event.data.action == 'unknown' }}
+    actions:
+      - action: logbook.log
+        data:
+          name: "Tapo button"
+          message: >
+            New native event: {{ trigger.event.data.native_name }}
