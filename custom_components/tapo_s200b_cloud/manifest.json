@@ -1,10 +1,12 @@
 {
   "domain": "tapo_s200b_cloud",
   "name": "Tapo S200B/S200D Cloud Events",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "documentation": "https://github.com/MFlys/tapo-s200b-h200-homeassistant",
   "issue_tracker": "https://github.com/MFlys/tapo-s200b-h200-homeassistant/issues",
   "config_flow": true,
   "iot_class": "cloud_polling",
-  "codeowners": []
+  "codeowners": [
+    "@MFlys"
+  ]
 }
