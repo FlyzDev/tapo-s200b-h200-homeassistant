@@ -9,13 +9,15 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, mac-mini-4]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Verify Python 3.12
+        run: |
+          PYTHON312="$(command -v python3.12)"
+          "$PYTHON312" -c 'import platform, sys; assert sys.version_info[:2] == (3, 12); assert platform.system() == "Darwin"'
+          "$PYTHON312" --version
       - name: Compile
-        run: python -m compileall custom_components tests
+        run: python3.12 -m compileall custom_components tests
       - name: Unit tests
-        run: python -m unittest discover -s tests -v
+        run: python3.12 -m unittest discover -s tests -v
