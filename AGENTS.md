@@ -18,7 +18,7 @@ If a future firmware/library version gains a reliable local source, add it as a 
 
 ## Critical invariants
 
-1. **Never replay history on startup.** Seed each button at the greatest current `logId`; emit only IDs greater than that baseline.
+1. **Never replay history on startup.** Seed the current event fingerprints per button; emit only previously unseen entries after startup.
 2. **Track each button independently.** Multiple buttons can have unrelated log streams.
 3. **Never commit or log private values.** Real account addresses, account secrets, cloud tokens, Thing IDs, IPs, Home Assistant storage dumps, phone names, and household entity IDs do not belong here.
 4. **Preserve raw semantics.** Native names currently observed are `singleClick`, `doubleClick`, and `rotation`.
@@ -33,7 +33,7 @@ If a future firmware/library version gains a reliable local source, add it as a 
 3. Fetch the account Thing list.
 4. Select S200B/S200D records.
 5. Fetch each button's Event Log.
-6. Sort fresh entries by `logId`.
+6. Deduplicate per button by event fingerprint and process fresh entries chronologically by timestamp; `logId` is not monotonic.
 7. Normalize and emit them.
 
 See `docs/PROTOCOL.md` for the request/response sequence.

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .cloud import (
@@ -56,8 +57,9 @@ async def async_setup_entry(
     runtime: dict[str, Any] = {
         "client": client,
         "buttons": {},
-        "last_log_ids": {},
         "seeded": set(),
+        "seen_event_keys": {},
+        "seen_event_order": {},
         "pending_clicks": {},
         "flush_tasks": {},
         "errors": 0,
@@ -169,6 +171,40 @@ async def _poll_loop(
         await asyncio.sleep(POLL_SECONDS)
 
 
+def _event_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    """Stable fingerprint independent of logId ordering or resets."""
+    return (
+        str(item.get("logId") or ""),
+        str(item.get("timestamp") or ""),
+        str(item.get("name") or ""),
+    )
+
+
+def _event_timestamp(item: dict[str, Any]) -> int:
+    """Timestamp ordering independent of non-monotonic vendor log IDs."""
+    try:
+        return int(item.get("timestamp") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _remember_event(
+    runtime: dict[str, Any],
+    button_key: str,
+    event_key: tuple[str, str, str],
+) -> None:
+    keys = runtime["seen_event_keys"].setdefault(button_key, set())
+    order = runtime["seen_event_order"].setdefault(button_key, deque())
+    if event_key in keys:
+        return
+    keys.add(event_key)
+    order.append(event_key)
+    # The cloud supplies up to 50 events per poll. Keep much more history
+    # per button to suppress duplicate events across response-order changes.
+    while len(order) > 1000:
+        keys.discard(order.popleft())
+
+
 async def _process_button_events(
     hass: HomeAssistant,
     runtime: dict[str, Any],
@@ -177,26 +213,25 @@ async def _process_button_events(
     events: list[dict[str, Any]],
 ) -> None:
     if key not in runtime["seeded"]:
-        runtime["last_log_ids"][key] = max(
-            (event_log_id(item) or 0 for item in events),
-            default=0,
-        )
+        # Seed existing events; never replay them after restarting.
+        for item in events:
+            _remember_event(runtime, key, _event_key(item))
         runtime["seeded"].add(key)
         _LOGGER.info(
-            "Tapo button Event Log seeded: model=%s logId=%s",
+            "Tapo button Event Log baseline: model=%s events=%s",
             button.get("model"),
-            runtime["last_log_ids"][key],
+            len(runtime["seen_event_keys"].get(key, set())),
         )
         return
 
-    last_log_id = int(runtime["last_log_ids"].get(key, 0))
+    known_keys = runtime["seen_event_keys"].setdefault(key, set())
     fresh = sorted(
         (
             item
             for item in events
-            if (event_log_id(item) or 0) > last_log_id
+            if _event_key(item) not in known_keys
         ),
-        key=lambda item: event_log_id(item) or 0,
+        key=lambda item: (_event_timestamp(item), event_log_id(item) or 0),
     )
     for item in fresh:
         payload = normalize_event(item, button)
@@ -210,8 +245,7 @@ async def _process_button_events(
             _queue_click(hass, runtime, button, 2)
         elif str(action).startswith("rotate_") or action == "rotation":
             hass.bus.async_fire(ROTATE_EVENT_NAME, payload)
-        last_log_id = max(last_log_id, int(payload["log_id"]))
-    runtime["last_log_ids"][key] = last_log_id
+        _remember_event(runtime, key, _event_key(item))
 
 
 async def _connect(
@@ -274,6 +308,23 @@ async def _flush_clicks(
     except asyncio.CancelledError:
         return
 
+    # Automations may still be arming event listeners during HA startup.
+    # Do not silently lose presses after cloud has connected.
+    if hass.state is not CoreState.running:
+        _LOGGER.info("Tapo click queued until Home Assistant is ready")
+        for _ in range(120):
+            if hass.state is CoreState.running:
+                break
+            await asyncio.sleep(1.0)
+        else:
+            _LOGGER.warning(
+                "Home Assistant did not become ready within 120 seconds; "
+                "discarding queued click(s)"
+            )
+            runtime["pending_clicks"].pop(key, None)
+            runtime["flush_tasks"].pop(key, None)
+            return
+
     count = int(runtime["pending_clicks"].pop(key, 0))
     runtime["flush_tasks"].pop(key, None)
     if count <= 0:
@@ -290,6 +341,7 @@ async def _flush_clicks(
         PRESS_EVENT_NAME,
         {
             "action": action,
+            "event": action,  # Backward compatible with local automations.
             "click_count": count,
             "device_id": key,
             "model": str(button.get("model") or ""),
