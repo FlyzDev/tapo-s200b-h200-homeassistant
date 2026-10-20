@@ -146,6 +146,18 @@ The default poll interval is 1 second, plus Tapo cloud propagation and normal ne
 
 See [docs/SECURITY.md](docs/SECURITY.md) before sharing logs.
 
+## Reauthentication and connection failures
+
+When Tapo rejects authentication (for example after a password change, account lock,
+or an unsupported verification requirement), the integration **stops polling**
+and opens Home Assistant's **Reauthenticate** flow. It does not repeatedly
+submit the stored password. Reenter a valid Tapo password to restart the entry.
+
+Transient API or network failures are retried with exponential backoff
+(5 seconds up to 5 minutes), without repeatedly forcing a fresh login.
+The integration emits Home Assistant bus events; it does not create a standalone
+status sensor.
+
 ## Limitations
 
 - This is an **unofficial** integration based on behavior used by the Tapo app.

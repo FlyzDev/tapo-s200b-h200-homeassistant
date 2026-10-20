@@ -40,6 +40,10 @@ class TapoCloudError(Exception):
     """Base error for the unofficial Tapo Thing Cloud client."""
 
 
+class TapoAuthenticationError(TapoCloudError):
+    """Raised when a login is explicitly rejected (credentials/MFA/lockout)."""
+
+
 class TapoTokenExpired(TapoCloudError):
     """Raised when the Thing API rejects an expired token."""
 
@@ -167,6 +171,10 @@ class TapoCloudClient:
             timeout=aiohttp.ClientTimeout(total=15),
         ) as response:
             raw = await response.text()
+        if response.status in (400, 401, 403):
+            raise TapoAuthenticationError(
+                f"Thing login rejected (HTTP {response.status})"
+            )
         if response.status >= 400:
             raise TapoCloudError(f"Thing login HTTP {response.status}")
         try:
@@ -175,10 +183,10 @@ class TapoCloudClient:
             raise TapoCloudError("Invalid Thing login response") from err
         code = error_code(envelope)
         if code:
-            raise TapoCloudError(f"Thing login error {code}")
+            raise TapoAuthenticationError(f"Thing login rejected ({code})")
         result = envelope.get("result")
         if not isinstance(result, dict) or not result.get("token"):
-            raise TapoCloudError("Thing login returned no token")
+            raise TapoAuthenticationError("Thing login returned no token")
         return str(result["token"])
 
     async def _discover_app_server(self, base_url: str) -> str:
@@ -208,11 +216,16 @@ class TapoCloudClient:
     async def login_thing_api(self) -> dict[str, str]:
         """Authenticate and discover the regional Thing app server."""
         failures: list[str] = []
+        authentication_rejected = False
         for base_url in THING_LOGIN_URLS:
             try:
                 token = await self._legacy_login(base_url)
                 app_server_url = await self._discover_app_server(base_url)
-            except (aiohttp.ClientError, TapoCloudError) as err:
+            except TapoAuthenticationError as err:
+                authentication_rejected = True
+                failures.append(f"{base_url}: {type(err).__name__}")
+                continue
+            except (aiohttp.ClientError, TimeoutError, TapoCloudError) as err:
                 failures.append(f"{base_url}: {type(err).__name__}")
                 continue
             self.token = token
@@ -221,6 +234,11 @@ class TapoCloudClient:
                 "token": token,
                 "appServerUrl": app_server_url,
             }
+        if authentication_rejected:
+            # Never let rejected credentials trigger an unattended login loop.
+            raise TapoAuthenticationError(
+                "Tapo login rejected; credentials or account verification required"
+            )
         raise TapoCloudError(
             "Thing login/service discovery failed on all known endpoints: "
             + ", ".join(failures)

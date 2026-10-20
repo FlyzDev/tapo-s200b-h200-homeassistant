@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .cloud import (
+    TapoAuthenticationError,
     TapoCloudClient,
     TapoCloudError,
     TapoTokenExpired,
@@ -60,9 +61,9 @@ async def async_setup_entry(
         "pending_clicks": {},
         "flush_tasks": {},
         "errors": 0,
+        "token_expirations": 0,
     }
     hass.data[DOMAIN][entry.entry_id] = runtime
-    _set_status(hass, "starting", runtime)
 
     runtime["task"] = hass.async_create_background_task(
         _poll_loop(hass, entry, runtime),
@@ -101,31 +102,9 @@ def _cancel_runtime(runtime: dict[str, Any]) -> None:
             task.cancel()
 
 
-def _set_status(
-    hass: HomeAssistant,
-    state: str,
-    runtime: dict[str, Any],
-    **extra: Any,
-) -> None:
-    buttons = list(runtime.get("buttons", {}).values())
-    hass.states.async_set(
-        "sensor.tapo_s200b_cloud",
-        state,
-        {
-            "friendly_name": "Tapo S200B/S200D Cloud Events",
-            "poll_seconds": POLL_SECONDS,
-            "fetch_size": FETCH_SIZE,
-            "button_count": len(buttons),
-            "models": sorted(
-                {
-                    str(button.get("model") or "")
-                    for button in buttons
-                    if button.get("model")
-                }
-            ),
-            **extra,
-        },
-    )
+def _retry_delay(errors: int) -> float:
+    """Bound consecutive transient failures to a five-minute backoff."""
+    return min(300.0, 5.0 * (2 ** min(max(errors - 1, 0), 6)))
 
 
 async def _poll_loop(
@@ -139,7 +118,6 @@ async def _poll_loop(
                 await _connect(hass, entry, runtime)
 
             client: TapoCloudClient = runtime["client"]
-            total_events = 0
             for key, button in list(runtime["buttons"].items()):
                 events = await client.thing_events(
                     button,
@@ -148,7 +126,6 @@ async def _poll_loop(
                 valid = [
                     item for item in events if event_log_id(item) is not None
                 ]
-                total_events += len(valid)
                 await _process_button_events(
                     hass,
                     runtime,
@@ -158,18 +135,24 @@ async def _poll_loop(
                 )
 
             runtime["errors"] = 0
-            _set_status(
-                hass,
-                "connected",
-                runtime,
-                returned_events=total_events,
-            )
+            runtime["token_expirations"] = 0
 
+        except TapoAuthenticationError:
+            _LOGGER.warning(
+                "Tapo login was rejected; stopping polling and requesting reauthentication"
+            )
+            entry.async_start_reauth(hass)
+            return
         except TapoTokenExpired:
             runtime["buttons"] = {}
-            if not await _reconnect(hass, entry, runtime):
-                await asyncio.sleep(15)
-                continue
+            runtime["token_expirations"] += 1
+            if runtime["token_expirations"] >= 2:
+                _LOGGER.warning(
+                    "Tapo token was rejected after relogin; requesting reauthentication"
+                )
+                entry.async_start_reauth(hass)
+                return
+            _LOGGER.info("Tapo token expired; attempting one fresh login")
         except asyncio.CancelledError:
             raise
         except Exception as err:  # noqa: BLE001
@@ -180,17 +163,8 @@ async def _poll_loop(
                     runtime["errors"],
                     type(err).__name__,
                 )
-            _set_status(
-                hass,
-                "error",
-                runtime,
-                error=type(err).__name__,
-                consecutive_errors=runtime["errors"],
-            )
-            if runtime["errors"] >= 3:
-                runtime["buttons"] = {}
-                await _reconnect(hass, entry, runtime)
-                await asyncio.sleep(5)
+            await asyncio.sleep(_retry_delay(runtime["errors"]))
+            continue
 
         await asyncio.sleep(POLL_SECONDS)
 
@@ -269,23 +243,6 @@ async def _connect(
         "Connected to Tapo Thing Event Log for %s button(s)",
         len(runtime["buttons"]),
     )
-
-
-async def _reconnect(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    runtime: dict[str, Any],
-) -> bool:
-    try:
-        await _connect(hass, entry, runtime)
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.warning(
-            "Tapo Thing API reconnect failed: %s",
-            type(err).__name__,
-        )
-        return False
-    runtime["errors"] = 0
-    return True
 
 
 def _queue_click(
