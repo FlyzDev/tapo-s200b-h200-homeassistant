@@ -83,6 +83,8 @@ A convenience event derived from native click entries. Clicks that arrive within
 
 `triple_click` is **derived by this integration**. It is not claimed to be a native Tapo event type.
 
+Grouped press events include both `action` (recommended) and `event` (legacy compatibility), plus `device_id` for multi-button filtering.
+
 ## Automation examples
 
 Single press:
@@ -124,11 +126,11 @@ For several buttons, filter on `device_id`. More examples are in [examples/autom
 
 ## Multiple buttons and startup behavior
 
-The integration discovers every supported S200B/S200D in the account and keeps an independent Event Log high-water mark for each one.
+The integration discovers every supported S200B/S200D in the account and deduplicates Event Log entries **independently per button**.
 
-On first connection after a Home Assistant/integration restart, the greatest current `logId` for each button is recorded as the baseline. Historical entries are **not replayed** as new button presses. Only entries with a greater `logId` are emitted after the baseline is established.
+On first connection after a Home Assistant/integration restart, the returned entries for each button form the baseline. Historical entries are **not replayed** as new button presses. Subsequent polls emit previously unseen event fingerprints (log ID + timestamp + native name), even when `logId` values are out of order or reset. Up to 1,000 recent fingerprints are retained per button.
 
-This prevents automations from firing merely because Home Assistant restarted.
+This prevents startup replays while recognizing legitimate presses despite non-monotonic log IDs. Grouped clicks received during Home Assistant startup are buffered for up to 120 seconds until automations are ready.
 
 ## Latency
 
@@ -145,6 +147,18 @@ The default poll interval is 1 second, plus Tapo cloud propagation and normal ne
 - Static application signing values in `cloud.py` are vendor application constants, not per-user credentials.
 
 See [docs/SECURITY.md](docs/SECURITY.md) before sharing logs.
+
+## Reauthentication and connection failures
+
+When Tapo rejects authentication (for example after a password change, account lock,
+or an unsupported verification requirement), the integration **stops polling**
+and opens Home Assistant's **Reauthenticate** flow. It does not repeatedly
+submit the stored password. Reenter a valid Tapo password to restart the entry.
+
+Transient API or network failures are retried with exponential backoff
+(5 seconds up to 5 minutes), without repeatedly forcing a fresh login.
+The integration emits Home Assistant bus events; it does not create a standalone
+status sensor.
 
 ## Limitations
 
@@ -165,7 +179,7 @@ Start with:
 - [cloud.py](custom_components/tapo_s200b_cloud/cloud.py) — small reusable async cloud client
 - [event_parser.py](custom_components/tapo_s200b_cloud/event_parser.py) — Home Assistant-independent event normalization
 
-If adapting the technique to another automation platform, preserve the startup baseline/high-water-mark behavior and keep credentials outside source code.
+If adapting the technique to another automation platform, preserve the per-button startup baseline and fingerprint deduplication behavior and keep credentials outside source code.
 
 ## Why this exists
 

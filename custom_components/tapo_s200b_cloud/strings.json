@@ -9,13 +9,22 @@
           "account": "Tapo account email",
           "secret": "Tapo account password"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Tapo account",
+        "description": "Tapo rejected the saved login. Enter your password to reconnect. Automatic login attempts have stopped.",
+        "data": {
+          "secret": "Tapo account password"
+        }
       }
     },
     "error": {
-      "cannot_connect": "Could not authenticate to Tapo Thing Cloud or no supported S200B/S200D was found."
+      "cannot_connect": "Could not authenticate to Tapo Thing Cloud or no supported S200B/S200D was found.",
+      "invalid_auth": "Tapo rejected this login. Check your password and account verification."
     },
     "abort": {
-      "already_configured": "This Tapo account is already configured."
+      "already_configured": "This Tapo account is already configured.",
+      "reauth_successful": "Tapo account successfully reauthenticated."
     }
   }
 }

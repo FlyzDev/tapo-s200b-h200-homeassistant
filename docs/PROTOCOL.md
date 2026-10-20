@@ -83,23 +83,18 @@ Unknown native names should still be emitted on the raw Home Assistant event so 
 
 ## 5. Polling and deduplication
 
-The endpoint is fetched in descending order. The integration converts each `logId` to an integer and uses it as a monotonic high-water mark **per button**.
-
-On the first successful fetch after startup:
+The endpoint requests descending order, but **observed `logId` values do not reliably increase with event timestamps**. Treating `logId` as a monotonic high-water mark drops legitimate new presses. Deduplicate with a bounded, per-button event fingerprint set instead:
 
 ```text
-baseline = max(current logIds)
-emit nothing
+fingerprint = (str(logId), str(timestamp), str(name))
+first fetch: remember all visible fingerprints without replaying historical events
+subsequent fetches: process event fingerprints not yet seen
+sort fresh entries by timestamp, using logId only to break ties
+emit the new event, then remember its fingerprint
+retain up to 1,000 fingerprints per button
 ```
 
-On later fetches:
-
-```text
-fresh = entries where logId > baseline
-sort fresh ascending by logId
-emit fresh
-baseline = max(emitted logId)
-```
+Clicks received before Home Assistant finishes initializing are dispatched once automation listeners become active (up to 120 seconds).
 
 This seed-on-start rule is essential: without it, restarting Home Assistant can replay historical presses and trigger real automations.
 
